@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>对冲盈亏计算器（支持手动价差）</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; }
+    table { border-collapse: collapse; margin-top: 20px; width: 100%; }
+    th, td { border: 1px solid #ccc; padding: 8px; text-align: center; }
+    th { background: #f0f0f0; }
+    .green { color: green; font-weight: bold; }
+    .red { color: red; font-weight: bold; }
+  </style>
+</head>
+<body>
+
+<h2>对冲盈亏计算器（支持手动最小价差）</h2>
+
+<label>开仓价格（USD）: <input type="number" id="priceOpen" value="91360.5"></label><br><br>
+<label>平仓价格（USD）: <input type="number" id="priceClose" value="92004.7"></label><br><br>
+<label>方向:
+  <select id="direction">
+    <option value="long">多</option>
+    <option value="short">空</option>
+  </select>
+</label><br><br>
+<label>数量（BTC）: <input type="number" id="amount" value="0.001"></label><br><br>
+<label>杠杆倍数: <input type="number" id="leverage" value="125"></label><br><br>
+<label>手续费（%）: <input type="number" id="feeRate" value="0.06" step="0.01"></label><br><br>
+<label>手续费返佣（%）: <input type="number" id="rebate" value="82" step="1"></label><br><br>
+
+<label>最小盈利价差（USD）: <input type="number" id="manualSpread" step="0.0001"></label>
+<small>（可手动调整，默认由系统计算）</small><br><br>
+
+<button onclick="calculate()">计算</button>
+
+<h3>交易明细（含对冲模拟）：</h3>
+<table id="recordTable">
+  <thead>
+    <tr>
+      <th>开/平</th>
+      <th>方向</th>
+      <th>成交价</th>
+      <th>平仓价</th>
+      <th>数量</th>
+      <th>杠杆</th>
+      <th>浮动盈亏</th>
+      <th>手续费成本</th>
+      <th>返佣收入</th>
+      <th>实际盈亏（不含返佣）</th>
+      <th>实际盈亏（含返佣）</th>
+    </tr>
+  </thead>
+  <tbody></tbody>
+</table>
+<h3>本次对冲盈亏汇总：</h3>
+<div id="summary"></div>
+<script>
+function formatProfit(value) {
+  const num = value.toFixed(6);
+  if (value > 0) return `<span class="green">+${num}</span>`;
+  if (value < 0) return `<span class="red">${num}</span>`;
+  return num;
+}
+
+function calculate() {
+  const priceOpen = parseFloat(document.getElementById("priceOpen").value);
+  const priceClose = parseFloat(document.getElementById("priceClose").value);
+  const amount = parseFloat(document.getElementById("amount").value);
+  const feeRate = parseFloat(document.getElementById("feeRate").value) / 100;
+  const rebate = parseFloat(document.getElementById("rebate").value) / 100;
+  const leverage = parseFloat(document.getElementById("leverage").value);
+  const direction = document.getElementById("direction").value;
+
+  const posValue = priceOpen * amount;
+  const rawFee = posValue * feeRate;
+  const rebateFee = rawFee * rebate;
+  const actualFee = rawFee - rebateFee;
+  const totalFee = actualFee * 2;
+  const totalRawFee = rawFee * 2;
+  const totalRebate = rebateFee * 2;
+
+  // 计算默认最小盈利价差
+  const calculatedSpread = priceOpen * feeRate * 2 * (1 - rebate);
+  const spreadInput = document.getElementById("manualSpread");
+
+  // 如果用户没填，自动填入系统推荐值
+  if (!spreadInput.value) {
+    spreadInput.value = calculatedSpread.toFixed(6);
+  }
+
+  // 最终使用的价差值
+  const minSpread = parseFloat(spreadInput.value);
+
+  const tbody = document.querySelector("#recordTable tbody");
+  tbody.innerHTML = "";
+
+  // 模拟持仓
+  const floatPnL = direction === 'long'
+    ? (priceClose - priceOpen) * amount
+    : (priceOpen - priceClose) * amount;
+  const netPnL_noRebate = floatPnL - totalRawFee;
+  const netPnL_withRebate = floatPnL - totalRawFee + totalRebate;
+
+  // 模拟对冲
+  const hedgeOpen = direction === 'long'
+    ? priceOpen + minSpread
+    : priceOpen - minSpread;
+  const hedgeFloatPnL = direction === 'long'
+    ? (hedgeOpen - priceClose) * amount
+    : (priceClose - hedgeOpen) * amount;
+  const hedgeNet_noRebate = hedgeFloatPnL - totalRawFee;
+  const hedgeNet_withRebate = hedgeFloatPnL - totalRawFee + totalRebate;
+
+  const renderRow = (label, dir, open, close, floatPnL, net1, net2) => {
+    tbody.innerHTML += `
+      <tr>
+        <td>${label}</td>
+        <td>${dir}</td>
+        <td>${open.toFixed(2)}</td>
+        <td>${close.toFixed(2)}</td>
+        <td>${amount}</td>
+        <td>${leverage}x</td>
+        <td>${formatProfit(floatPnL)}</td>
+        <td>-${totalRawFee.toFixed(6)}</td>
+        <td>+${totalRebate.toFixed(6)}</td>
+        <td>${formatProfit(net1)}</td>
+        <td>${formatProfit(net2)}</td>
+      </tr>
+    `;
+  };
+
+  renderRow("模拟持仓", direction === 'long' ? '多' : '空', priceOpen, priceClose, floatPnL, netPnL_noRebate, netPnL_withRebate);
+  renderRow("模拟对冲", direction === 'long' ? '空' : '多', hedgeOpen, priceClose, hedgeFloatPnL, hedgeNet_noRebate, hedgeNet_withRebate);
+
+  // 对冲操作汇总利润（用模拟对冲单）
+const summaryProfitNoRebate = hedgeNet_noRebate + netPnL_noRebate;
+const summaryProfitWithRebate = hedgeNet_withRebate + netPnL_withRebate;
+
+const totalMargin = priceOpen * amount * 2 / leverage; // 总保证金（对冲是双边）
+const profitRateNoRebate = (summaryProfitNoRebate / totalMargin) * 100;
+const profitRateWithRebate = (summaryProfitWithRebate / totalMargin) * 100;
+
+document.getElementById("summary").innerHTML = `
+  <table>
+    <tr><th>项目</th><th>值</th></tr>
+    <tr><td>💰 对冲利润（不含返佣）</td><td>${formatProfit(summaryProfitNoRebate)} USDT</td></tr>
+    <tr><td>💰 对冲利润（含返佣）</td><td>${formatProfit(summaryProfitWithRebate)} USDT</td></tr>
+    <tr><td>📈 对冲利润率（不含返佣）</td><td>${profitRateNoRebate.toFixed(4)}%</td></tr>
+    <tr><td>📈 对冲利润率（含返佣）</td><td>${profitRateWithRebate.toFixed(4)}%</td></tr>
+  </table>
+`;
+}
+</script>
+
+</body>
+</html>
